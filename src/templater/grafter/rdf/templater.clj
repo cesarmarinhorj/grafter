@@ -6,34 +6,6 @@
   (:import [org.openrdf.rio RDFFormat]
            [org.openrdf.model URI]))
 
-(defn- valid-uri? [node]
-  (let [types [java.lang.String java.net.URL java.net.URI URI]]
-    (some (fn [t] (instance? t node)) types)))
-
-(defn- is-literal? [node]
-  (not (or (nil? node)
-           (vector? node)
-           (map? node)
-           (set? node))))
-
-(defn- valid-subject? [node]
-  (or (valid-uri? node)
-      (keyword? node)))
-
-(defn- valid-predicate? [node]
-  (valid-uri? node))
-
-(defn- valid-object? [object]
-  (if (or (valid-subject? object)
-          (is-literal? object))
-    true
-    (when (vector? object)
-      (cond
-       (= 2 (count object)) (let [[p o] object]
-                              (and (valid-predicate? p)
-                                   (valid-object? o)))
-       (= 1 (count object)) (valid-object? (first object))))))
-
 (defn- make-triples [subject predicate object-or-nested-subject]
   (if (vector? object-or-nested-subject)
     (let [bnode-resource (keyword (gensym "bnode"))
