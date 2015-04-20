@@ -231,13 +231,13 @@
 
 (defn derive-column
   "Adds a new column to the end of the row which is derived from
-column with position col-n.  f should just return the cells value.
+  column with position col-n.  f should just return the cells value.
 
-If no f is supplied the identity function is used, which results in
-the specified column being cloned."
+  If no f is supplied the identity function is used, which results in
+  the specified column being cloned."
 
   ([dataset new-column-name from-cols]
-     (derive-column dataset new-column-name from-cols identity))
+   (derive-column dataset new-column-name from-cols identity))
 
   ([dataset new-column-name from-cols f]
    (let [from-cols (lift->vector from-cols)
