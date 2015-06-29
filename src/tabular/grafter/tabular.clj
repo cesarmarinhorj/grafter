@@ -5,6 +5,7 @@
             [grafter.pipeline :refer [graft-form->Pipeline]]
             [grafter.tabular.common :refer [lift->vector map-keys] :as tabc]
             [grafter.tabular.csv]
+            [grafter.error :refer [error? rdf-error? ->GrafterError]]
             [grafter.tabular.excel]
             [grafter.tabular.melt]
             [clojure.tools.logging :refer [spy]]
@@ -229,6 +230,26 @@
 (defn- resolve-all-col-ids [dataset source-cols]
   (map (partial resolve-column-id dataset) source-cols))
 
+(defmacro inline-exceptions [& forms]
+  ;; TODO consider capturing context too so we can put it in the error object
+  `(try
+     ~@forms
+     (catch Exception ex#
+       (->GrafterError (str ex#)
+                       (class ex#)
+                       ex#
+                       nil))
+     (catch RuntimeException rex#
+       (->GrafterError (str rex#)
+                       (class rex#)
+                       rex#
+                       nil))
+     (catch AssertionError ae#
+       (->GrafterError (str ae#)
+                       (class ae#)
+                       ae#
+                       nil))))
+
 (defn derive-column
   "Adds a new column to the end of the row which is derived from
   column with position col-n.  f should just return the cells value.
@@ -247,7 +268,8 @@
                             :rows
                             (map (fn [row]
                                    (let [args-from-cols (select-row-values resolved-from-cols row)
-                                         new-col-val (apply f args-from-cols)]
+                                         new-col-val (inline-exceptions
+                                                      (apply f args-from-cols))]
                                      (merge row {new-column-name new-col-val })))))
                        (concat (column-names dataset) [new-column-name]))
          (with-meta (meta dataset))))))
@@ -439,7 +461,8 @@
         new-columns (concat-new-columns dataset (keys functions))
         apply-functions (fn [row]
                           (let [apply-column-f (fn [[col-id f]]
-                                                 (let [fval (f (row col-id))]
+                                                 (let [fval (inline-exceptions
+                                                             (f (row col-id)))]
                                                    {col-id fval}))]
                             (apply merge (map apply-column-f
                                               functions))))]
