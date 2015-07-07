@@ -265,7 +265,8 @@
                               (string? column-key) (keyword column-key)
                               (keyword? column-key) (name column-key)
                               (integer? column-key) (nth headers column-key not-found))]
-    (if-let [val (some #{column-key converted-column-key} headers)]
+    (if-let [val (and converted-column-key
+                      (some #{column-key converted-column-key} headers))]
       val
       not-found)))
 
