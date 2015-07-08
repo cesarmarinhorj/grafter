@@ -526,10 +526,13 @@
                           ;; terms of either incanter.core/to-map
                           ;; or zipmap
                           (let [apply-to-cols (fn [[col f]]
-                                                (->> rows
-                                                     (map (fn [r] (get r col)))
-                                                     f
-                                                     (map (fn [r] {col r}))))]
+                                                (let [fe (wrap-inline-exceptions f)
+                                                      colrows-or-err (fe (map (fn [r] (get r col))
+                                                                              rows))]
+
+                                                  (if (error? colrows-or-err)
+                                                    (repeat {col colrows-or-err})
+                                                    (map (fn [r] {col r}) colrows-or-err))))]
                             (->> functions
                                  (map apply-to-cols)
                                  (apply (partial map merge)))))]

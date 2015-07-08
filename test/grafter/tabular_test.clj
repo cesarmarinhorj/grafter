@@ -1,5 +1,6 @@
 (ns grafter.tabular-test
   (:require [clojure.test :refer :all]
+            [clojure.string]
             [grafter.sequences :as seqs]
             [grafter.tabular :refer :all]
             [grafter.error :refer [error?]]
@@ -780,6 +781,28 @@
           (is (= {"a" "http://one/" "b" "http://two/" "c" "http://three/"}
                  (:grafter.tabular/row quad-meta))
               "Adds the row that yielded each Quad as metadata"))))))
+
+(deftest apply-columns-test
+  (let [ds (make-dataset [["foo" "bar"] ["bar" 1] ["baz" 2] ["lol" 3] ["lal" 4]])]
+
+    (is (= ds (apply-columns ds {"a" identity}))
+        "Applying identity to a column shouldn't change the dataset in any other way")
+
+    (let [expected (make-dataset [["FOO" "bar"] ["BAR" 1] ["BAZ" 2] ["LOL" 3] ["LAL" 4]])]
+      (is (= expected (apply-columns ds {"a" (fn [a]
+                                               (is (coll? a)
+                                                   "apply-columns should pass a collection to the supplied functions.")
+
+                                               (map clojure.string/upper-case a))}))
+          "Should upper-case the whole column."))))
+
+(deftest apply-columns-error-test
+  (let [ds (make-dataset [["foo" "bar"] [nil 1] ["baz" 2] [nil 3] [nil 4] ["lal" 5]])]
+    (is (every? error? (->> (apply-columns ds
+                                           {:a (fn [x] (throw (RuntimeException. "error generating column.")))})
+                            :rows
+                            (map (fn [r] (get r "a")))))
+        "Should fill the error down the column")))
 
 (deftest rename-test
   (let [ds (test-dataset 1 2)]
