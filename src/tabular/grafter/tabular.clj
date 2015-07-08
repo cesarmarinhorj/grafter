@@ -56,6 +56,18 @@
                              (map first))]
     not-found-items))
 
+(defn- elided-col-description
+  "Print elided descriptions of columns for error messages with a sample set and
+  the rest hidden behind an elipsis, e.g. \":one, :two, :three ...\""
+  [coll]
+  (if (seq coll)
+    (let [[examples more] (take 2 (partition-all 3 (map pr-str coll)))
+          csv (str/join ", " examples)
+          ellision (when (seq more)
+                     " ...")]
+      (str csv ellision))
+    (pr-str nil)))
+
 (defn- all-columns
   "Takes a dataset and a finite sequence of column identifiers.
 
@@ -76,7 +88,7 @@
           (with-meta inc-ds (meta dataset))
           (with-meta (make-dataset [inc-ds] cols) (meta dataset))))
       (throw (IndexOutOfBoundsException. (str "The columns: "
-                                              (str/join ", " not-found-items)
+                                              (elided-col-description cols)
                                               " are not currently defined."))))))
 
 (defn- indexed [col]
@@ -144,16 +156,6 @@
       (if (not= -1 val)
         val
         ::not-found))))
-
-(defn- elided-col-description
-  "Print elided descriptions of columns for error messages with a sample set and
-  the rest hidden behind an elipsis, e.g. \":one, :two, :three ...\""
-  [coll]
-  (let [[examples more] (take 2 (partition-all 3 coll))
-        csv (str/join ", " examples)
-        ellision (when (seq more)
-                   " ...")]
-    (str csv ellision)))
 
 (defn columns
   "Given a dataset and a sequence of column identifiers, columns
