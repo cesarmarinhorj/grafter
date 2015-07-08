@@ -11,7 +11,11 @@
 
   Throwable
   (error? [this]
-    this))
+    this)
+
+  nil
+  (error? [this]
+    nil))
 
 (defn rdf-error?
   "Returns true if the value is a Grafter error type or nil.  RDF errors are
@@ -44,7 +48,11 @@
 
   Object
   (toString [this]
-    (:msg this) ))
+    (:msg this))
+
+  IIsError
+  (error? [this]
+    this))
 
 (extend-protocol IError
   Throwable

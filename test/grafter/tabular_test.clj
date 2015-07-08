@@ -2,6 +2,7 @@
   (:require [clojure.test :refer :all]
             [grafter.sequences :as seqs]
             [grafter.tabular :refer :all]
+            [grafter.error :refer [error?]]
             [grafter.rdf.protocols :refer [->Quad]]
             [grafter.rdf.templater :refer [graph triplify]]
             [grafter.tabular.csv]
@@ -454,6 +455,36 @@
           (is (= md
                  (meta (grep ds 1)))))))))
 
+(deftest grep-inline-errors-test
+  (let [ds (make-dataset [[0 0 0 0 :no-errors-on-this-row-so-remove-it]
+                          [1 :foo 0 2 :error-here]
+                          [1 :error-here 0 0 :error-here]
+                          [0 1 2 3 :match]])
+
+        error-on-marker (fn [x]
+                          (cond
+                            (= x :error-here) (throw (RuntimeException. "foo"))
+                            (= x :match) true
+                            :else false))
+
+        rows (:rows (grep ds error-on-marker))]
+
+    (is (error? (-> rows first (get "e")))
+        "Error object should be found in the cell it occurred.")
+
+    (testing "Shortcircuiting errors"
+      (is (error? (-> rows second (get "b")))
+          "First error object should be found in the cell where it occurred.")
+
+      (let [val (-> rows second (get "e"))]
+        (is (and (not (error? val))
+                 (= :error-here val))
+            "Even though this cell should error, the presence of the first error should prevent the rest of the row being evaluated.")))
+
+    (is (= {"a" 0 "b" 1 "c" 2 "d" 3 "e" :match}
+           (nth rows 2))
+        "Matched row should be returned.")))
+
 (deftest mapc-test
   (let [dataset (make-dataset [[1 2 "foo" 4]
                                [5 6 "bar" 8]
@@ -638,7 +669,7 @@
         (is (thrown? IndexOutOfBoundsException
                      ((build-lookup-table debts [] "debt") "bob"))))
       (testing "key column not existing"
-        (is (thrown? IllegalArgumentException
+        (is (thrown? IndexOutOfBoundsException
                      ((build-lookup-table debts "foo" "debt") "bob")))))))
 
 (deftest add-columns-with-lookup-table-test

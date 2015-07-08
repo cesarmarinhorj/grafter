@@ -184,6 +184,31 @@
                                               (elided-col-description cols)
                                               " are not currently defined."))))))
 
+(defmacro ^:private inline-exceptions [& forms]
+  ;; TODO consider capturing context too so we can put it in the error object
+  `(try
+     ~@forms
+     (catch Exception ex#
+       (->GrafterError (str ex#)
+                       (class ex#)
+                       ex#
+                       nil))
+     (catch RuntimeException rex#
+       (->GrafterError (str rex#)
+                       (class rex#)
+                       rex#
+                       nil))
+     (catch AssertionError ae#
+       (->GrafterError (str ae#)
+                       (class ae#)
+                       ae#
+                       nil))))
+
+(defn- wrap-inline-exceptions [f]
+  (fn catch-exceptions [& args]
+    (inline-exceptions
+      (apply f args))))
+
 (defn rename-columns
   "Renames the columns in the dataset.  Takes either a map or a
   function.  If a map is passed it will rename the specified keys to
@@ -200,7 +225,7 @@
   (if (map? col-map-or-fn)
     (inc/rename-cols col-map-or-fn dataset)
     (let [old-key->new-key (partial map-keys col-map-or-fn)
-          new-columns (map col-map-or-fn
+          new-columns (map (wrap-inline-exceptions col-map-or-fn)
                            (column-names dataset))]
 
       (-> (make-dataset (inc/to-list dataset)
@@ -229,28 +254,10 @@
         new-column-hash (resolve-keys new-header new-col-val)]
     (merge row new-column-hash)))
 
-(defn- resolve-all-col-ids [dataset source-cols]
-  (map (partial resolve-column-id dataset) source-cols))
-
-(defmacro inline-exceptions [& forms]
-  ;; TODO consider capturing context too so we can put it in the error object
-  `(try
-     ~@forms
-     (catch Exception ex#
-       (->GrafterError (str ex#)
-                       (class ex#)
-                       ex#
-                       nil))
-     (catch RuntimeException rex#
-       (->GrafterError (str rex#)
-                       (class rex#)
-                       rex#
-                       nil))
-     (catch AssertionError ae#
-       (->GrafterError (str ae#)
-                       (class ae#)
-                       ae#
-                       nil))))
+(defn- resolve-all-col-ids
+  ([dataset source-cols] (resolve-all-col-ids dataset source-cols nil))
+  ([dataset source-cols not-found]
+   (map (fn [c] (resolve-column-id dataset c not-found)) source-cols)))
 
 (defn derive-column
   "Adds a new column to the end of the row which is derived from
@@ -292,14 +299,29 @@
 
 (defn- infer-new-columns-from-first-row [dataset source-cols f]
   (let [source-cols (resolve-all-col-ids dataset source-cols)
-        first-row-values (->> dataset
-                              :rows
-                              first
-                              (select-row-values source-cols))
-        first-result (apply f first-row-values)
-        new-col-ids (keys first-result)]
-
-    new-col-ids))
+        first-row (-> dataset :rows first)
+        first-row-values (select-row-values source-cols first-row)]
+    (let [first-result (try
+                         (apply f first-row-values)
+                         (catch Exception ex
+                           (throw (ex-info
+                                   (apply str "Could not apply the given function to columns " (elided-col-description source-cols) ".")
+                                   {:function f
+                                    :applied-values first-row-values
+                                    :source-columns source-cols
+                                    :row first-row}
+                                   ex))))
+          new-col-ids (try
+                        (keys first-result)
+                        (catch Exception ex
+                          (throw (ex-info (str "Invalid return type from given function.  Expected a map to be returned but received a " (.getName (class first-result)) ".")
+                                          {:function f
+                                           :returned-value first-result
+                                           :source-columns source-cols
+                                           :applied-values first-row-values
+                                           :row first-row}
+                                          ex))))]
+      new-col-ids)))
 
 (defn add-columns
   "Add several new columns to a dataset at once.  There are a number of different parameterisations:
@@ -344,8 +366,12 @@
 
   ([dataset source-cols f]
      (let [source-cols (lift->vector source-cols)
-           new-col-ids (infer-new-columns-from-first-row dataset source-cols f)]
-       (add-columns dataset new-col-ids source-cols f)))
+           new-col-ids (inline-exceptions (infer-new-columns-from-first-row dataset source-cols f))]
+       (if (error? new-col-ids)
+         ;; If there's an error inferring the column id return it in the header
+         ;; and filled down through the rows of the column.
+         (add-column dataset new-col-ids new-col-ids)
+         (add-columns dataset new-col-ids source-cols f))))
 
   ([dataset new-col-ids source-cols f]
      (let [source-cols (lift->vector source-cols)
@@ -381,18 +407,24 @@
        (map second)))
 
 (defmethod grep clojure.lang.IFn
-
   [dataset f & cols]
   (let [data (:rows dataset)
         cols (if (nil? cols)
                  (column-names dataset)
                  (first cols))
-        col-set (into #{} cols)]
+        col-set (into #{} cols)
+        f (wrap-inline-exceptions f)]
 
     (-> (make-dataset (->> data
-                           (filter (fn [row]
-                                     (some f
-                                           (cells-from-columns col-set row)))))
+                           (map (fn [row]
+                                  (reduce (fn [acc k]
+                                            (if-let [matched (f (get row k))]
+                                              (if (error? matched)
+                                                (reduced (assoc row k matched))
+                                                (reduced row))
+                                              nil))
+                                          row (map (fn [k] (resolve-column-id dataset k)) cols))))
+                           (filter identity))
                       (column-names dataset))
         (with-meta (meta dataset)))))
 
@@ -542,10 +574,10 @@
 (defn- order-values [key-cols hash]
   (map #(get hash %) key-cols))
 
-(defn resolve-key-cols [dataset key-cols]
-  (->> (set (lift->vector key-cols))
-       (order-values key-cols)
-       (resolve-all-col-ids dataset)))
+(defn resolve-key-cols [dataset key-cols not-found]
+  (resolve-all-col-ids dataset (->> (set (lift->vector key-cols))
+                                    (order-values key-cols))
+                       not-found))
 
 (defn build-lookup-table
   "Takes a dataset, a vector of any number of column names corresponding
@@ -557,9 +589,10 @@
      (build-lookup-table dataset key-cols nil))
 
   ([dataset key-cols return-keys]
-     (let [key-cols (resolve-key-cols dataset (lift->vector key-cols))
-           return-keys (resolve-all-col-ids dataset
-                                            (if (nil? return-keys)
+   (let [not-found (Object.)
+         key-cols (resolve-key-cols dataset (lift->vector key-cols) not-found)
+         return-keys (resolve-all-col-ids dataset
+                                          (if (nil? return-keys)
                                               (remaining-keys dataset key-cols)
                                               (lift->vector return-keys)))
 
