@@ -580,6 +580,17 @@
         (is (= md
                (meta (derive-column ds "c" ["a"] str))))))))
 
+(deftest derive-column-errors-test
+  (let [subject (-> (test-dataset 2 2)
+                    (derive-column "c" ["a" "b"] (fn [a b] (if (= a 0)
+                                                            (throw (RuntimeException. "An error"))
+                                                            (+ a b)))))]
+    (is (error? (-> subject :rows first (get "c")))
+        "Error should be located in cell C0.")
+
+    (is (= 2 (-> subject :rows second (get "c")))
+        "Cell C1 which don't error should be derived as normal.")))
+
 (deftest add-columns-test
   (let [subject (make-dataset [[1 2 3] [4 5 6]])]
     (testing "add-columns"
