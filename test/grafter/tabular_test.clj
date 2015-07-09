@@ -637,6 +637,17 @@
             (is (= md
                    (meta (add-columns ds {"foo" 1}))))))))))
 
+(deftest add-columns-with-errors-test
+  (let [raise-error-fn (fn [a b] (throw (RuntimeException. "Error occurred")))
+        subject (add-columns (test-dataset 2 2) ["a" "b"] raise-error-fn)]
+
+    (let [err (-> subject :column-names (nth 2))]
+      (is (error? err)
+          "Error should be listed in place of the columns name")
+
+      (is (every? error? (->> subject :rows (map (fn [r] (get r err)))))
+          "Error should be listed in place of the columns name"))))
+
 (deftest build-lookup-table-test
   (let [debts (make-dataset [["rick"  25     33]
                              ["john"  9      12]
