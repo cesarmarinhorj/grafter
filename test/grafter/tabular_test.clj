@@ -804,15 +804,22 @@
                             (map (fn [r] (get r "a")))))
         "Should fill the error down the column")))
 
-(deftest rename-test
+(deftest rename-columns-test
   (let [ds (test-dataset 1 2)]
     (is (= (make-dataset [[0 0]] [:a :b])
            (rename-columns ds keyword) ))
 
     (is (= (make-dataset [[0 0]] ["foo" "b"])
-           (rename-columns ds {"a" "foo"})))
+           (rename-columns ds {"a" "foo"})))))
 
-
-    )
-
-  )
+(deftest rename-columns-error-test
+  (let [ds (make-dataset [["a" "b"]] ["a" nil])
+        renamed-cols (:column-names (rename-columns ds (fn [a]
+                                                            (if (nil? a)
+                                                              (throw (RuntimeException.
+                                                                      "There was a null value.  This error should be listed in the column position."))
+                                                              (clojure.string/upper-case a)))))]
+    (is (= "A" (first renamed-cols))
+        "The first column should be upper cased.")
+    (is (error? (second renamed-cols))
+        "The second column should have raised an error, which is listed in the header position.")))
