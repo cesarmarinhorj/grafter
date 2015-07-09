@@ -531,6 +531,29 @@
         (is (= md
                (meta (mapc ds {"a" str}))))))))
 
+(deftest mapc-errors-test
+  (let [raise-on-nil (fn [x] (if (nil? x)
+                              (throw (RuntimeException. "Foo error"))
+                              x))
+        ds (-> (make-dataset [[nil 1]
+                              [2 nil]])
+
+               (mapc {"a" raise-on-nil "b" raise-on-nil}))]
+
+    (let [first-row (-> ds :rows first)]
+
+      (is (error? (get first-row "a"))
+          "An error should be in cell a0")
+
+      (is (not (error? (get first-row "b")))
+          "An error should be in cell a0"))
+
+    (let [second-row (-> ds :rows second)]
+      (is (not (error? (get second-row "a")))
+          "An error should be in cell a0")
+
+      (is (error? (get second-row "b"))
+          "An error should be in cell a0"))))
 
 (deftest swap-test
   (let [ordered-ds (make-dataset
