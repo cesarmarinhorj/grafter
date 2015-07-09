@@ -828,15 +828,15 @@
               "Adds the row that yielded each Quad as metadata"))))))
 
 (deftest graph-fn-error-test
-  (let [templatize (graph-fn [{:strs [a err]}]
-                             (graph "http://foo.com/graph/1"
-                                    ["http://foo.com/subject"
-                                     ["http://foo.com/predicate/2" err]]))
-        ds (-> (test-dataset 1 1)
-               (derive-column "err" "a" (fn [x] (throw (RuntimeException. "Test error.")))))]
+  (testing "Error values in cells pass through graph templates into the statement"
+    (let [templatize (graph-fn [{:strs [a err]}]
+                               (graph "http://foo.com/graph/1"
+                                      ["http://foo.com/subject"
+                                       ["http://foo.com/predicate/2" err]]))
+          ds (-> (test-dataset 1 1)
+                 (derive-column "err" "a" (fn [x] (throw (RuntimeException. "Test error.")))))]
 
-    (is (error? (grafter.rdf/object (first (templatize ds))))
-        "Error values in cells pass through graph templates into the statement")))
+      (is (error? (grafter.rdf/object (first (templatize ds))))))))
 
 (deftest apply-columns-test
   (let [ds (make-dataset [["foo" "bar"] ["bar" 1] ["baz" 2] ["lol" 3] ["lal" 4]])]

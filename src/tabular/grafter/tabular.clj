@@ -184,30 +184,24 @@
                                               (elided-col-description cols)
                                               " are not currently defined."))))))
 
-(defmacro ^:private inline-exceptions [& forms]
-  ;; TODO consider capturing context too so we can put it in the error object
-  `(try
-     ~@forms
-     (catch Exception ex#
-       (->GrafterError (str ex#)
-                       (class ex#)
-                       ex#
-                       nil))
-     (catch RuntimeException rex#
-       (->GrafterError (str rex#)
-                       (class rex#)
-                       rex#
-                       nil))
-     (catch AssertionError ae#
-       (->GrafterError (str ae#)
-                       (class ae#)
-                       ae#
-                       nil))))
+(defmacro ^:private inline-exceptions
+  ([form]
+   `(inline-exceptions nil ~form))
+  ([ctx form]
+   ;; TODO consider capturing context too so we can put it in the error object
+   `(try
+      ~form
+      (catch Exception ex#
+        (grafter.GrafterException. (.getMessage ex#) ~ctx ex#))
+      (catch AssertionError ae#
+        (grafter.GrafterException. (.getMessage ae#) ~ctx ae#)))))
 
-(defn- wrap-inline-exceptions [f]
-  (fn catch-exceptions [& args]
-    (inline-exceptions
-      (apply f args))))
+(defn- wrap-inline-exceptions
+  ([f] (wrap-inline-exceptions nil f))
+  ([ctx f]
+   (fn catch-exceptions [& args]
+     (inline-exceptions ctx
+                        (apply f args)))))
 
 (defn rename-columns
   "Renames the columns in the dataset.  Takes either a map or a
@@ -277,7 +271,10 @@
                             :rows
                             (map (fn [row]
                                    (let [args-from-cols (select-row-values resolved-from-cols row)
-                                         new-col-val (inline-exceptions
+                                         new-col-val (inline-exceptions {:row row
+                                                                         :function f
+                                                                         :applied-values args-from-cols
+                                                                         :source-columns resolved-from-cols}
                                                       (apply f args-from-cols))]
                                      (merge row {new-column-name new-col-val })))))
                        (concat (column-names dataset) [new-column-name]))
@@ -412,17 +409,22 @@
         cols (if (nil? cols)
                  (column-names dataset)
                  (first cols))
-        col-set (into #{} cols)
-        f (wrap-inline-exceptions f)]
+        col-set (into #{} cols)]
 
     (-> (make-dataset (->> data
                            (map (fn [row]
                                   (reduce (fn [acc k]
-                                            (if-let [matched (f (get row k))]
-                                              (if (error? matched)
-                                                (reduced (assoc row k matched))
-                                                (reduced row))
-                                              nil))
+                                            (let [val (get row k)]
+                                              (if-let [matched (inline-exceptions {:row row
+                                                                                   :applied-values val
+                                                                                   :function f
+                                                                                   :source-columns cols
+                                                                                   }
+                                                                                  (f val))]
+                                                (if (error? matched)
+                                                  (reduced (assoc row k matched))
+                                                  (reduced row))
+                                                nil)))
                                           row (map (fn [k] (resolve-column-id dataset k)) cols))))
                            (filter identity))
                       (column-names dataset))
@@ -495,8 +497,12 @@
         new-columns (concat-new-columns dataset (keys functions))
         apply-functions (fn [row]
                           (let [apply-column-f (fn [[col-id f]]
-                                                 (let [fval (inline-exceptions
-                                                             (f (row col-id)))]
+                                                 (let [val (row col-id)
+                                                       fval (inline-exceptions {:row row
+                                                                                :function f
+                                                                                :applied-values val
+                                                                                :source-columns col-id}
+                                                             (f val))]
                                                    {col-id fval}))]
                             (apply merge (map apply-column-f
                                               functions))))]

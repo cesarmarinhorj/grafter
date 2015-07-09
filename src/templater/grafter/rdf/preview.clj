@@ -3,7 +3,8 @@
   with values from datasets."
   (:require [clojure.walk]
             [clojure.edn :as edn]
-            [grafter.tabular :refer [make-dataset]])
+            [grafter.tabular :refer [make-dataset]]
+            [grafter.error :refer [->GrafterError]])
   (:import [incanter.core Dataset]))
 
 (defn- symbolize-keys [m]
@@ -81,7 +82,7 @@
     (letfn [(make-readable [val]
               (if (readable-form? val)
                 val
-                (unreadable-form val)))]
+                (->printable-form val)))]
       (zipmap (map make-readable (keys form))
               (map make-readable (vals form)))))
 
@@ -90,6 +91,13 @@
     (if (readable-form? form)
       form
       (unreadable-form form)))
+
+  java.lang.Exception
+  (->printable-form [ex]
+    (->GrafterError (.getMessage ex)
+                    (.getName (class ex))
+                    (->printable-form (.getCause ex))
+                    nil))
 
   nil
   (->printable-form [nl]

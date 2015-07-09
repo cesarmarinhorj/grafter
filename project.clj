@@ -27,6 +27,7 @@
                  [com.novemberain/pantomime "2.4.0"] ;; mimetypes
                  ]
 
+  :java-source-paths ["src-java"]
 
   :codox {:defaults {:doc "FIXME: write docs"
                      :doc/format :markdown}
