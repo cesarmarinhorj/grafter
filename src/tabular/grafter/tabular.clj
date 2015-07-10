@@ -219,7 +219,11 @@
   (if (map? col-map-or-fn)
     (inc/rename-cols col-map-or-fn dataset)
     (let [old-key->new-key (partial map-keys col-map-or-fn)
-          new-columns (map (wrap-inline-exceptions col-map-or-fn)
+          new-columns (map-indexed (fn [idx c] (inline-exceptions {:column c
+                                                                  :column-position idx
+                                                                  :function col-map-or-fn
+                                                                  :applied-values c}
+                                                     (col-map-or-fn c)))
                            (column-names dataset))]
 
       (-> (make-dataset (inc/to-list dataset)
@@ -665,13 +669,18 @@
                             (let ~(if (vector? row-bindings)
                                     (generate-vector-bindings ds-sym row-sym row-bindings)
                                     (splice-supplied-bindings row-sym row-bindings))
-                              (->> (concat ~@forms)
-                                   (map (fn with-row-meta [triple#]
-                                          (let [meta# {::row ~row-sym}
-                                                meta# (if (meta ~ds-sym)
-                                                        (assoc meta# ::dataset (meta ~ds-sym))
-                                                        meta#)]
-                                            (with-meta triple# meta#)))))))]
+                              (concat
+                               ;; Put any errors found in the column names at
+                               ;; the front of the sequence.
+                               (filter error? (:column-names ~ds-sym))
+
+                               (->> (concat ~@forms)
+                                    (map (fn with-row-meta [triple#]
+                                           (let [meta# {::row ~row-sym}
+                                                 meta# (if (meta ~ds-sym)
+                                                         (assoc meta# ::dataset (meta ~ds-sym))
+                                                         meta#)]
+                                             (with-meta triple# meta#))))))))]
 
                     (mapcat graphify-row# (:rows ~ds-sym))))
        ;; Add metadata to function definition to support

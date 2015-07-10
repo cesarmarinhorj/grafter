@@ -836,7 +836,53 @@
           ds (-> (test-dataset 1 1)
                  (derive-column "err" "a" (fn [x] (throw (RuntimeException. "Test error.")))))]
 
-      (is (error? (grafter.rdf/object (first (templatize ds))))))))
+      (is (error? (grafter.rdf/object (first (templatize ds)))))))
+
+  (testing "Column errors are reported at the start of the sequence of quads"
+    (let [templatize (graph-fn [{:strs [a b]}]
+                               (graph "http://foobar.com/graph"
+                                      ["http://test.com/"
+                                       [a b]]))
+          applied-erroring-function (fn [c] (throw (RuntimeException. "Test error")))
+          ds (rename-columns (test-dataset 1 2)
+                             applied-erroring-function)
+          results (templatize ds)]
+
+
+      (let [column-a-err (first results)
+            column-b-err (second results)
+            statement (nth results 2)]
+
+        (testing "Column errors"
+          (testing "Column 0"
+            (is (error? column-a-err)
+                "First result should be the first column error")
+            (testing "Exception metadata"
+              (let [mdata (meta column-a-err)]
+                (is (= "a" (:column mdata) (:applied-values mdata))
+                    "The :column name and the :applied-values should be 'a'")
+                (is (= 0 (:column-position mdata))
+                    "The :column-position with the error is 0")
+                (is (= applied-erroring-function (:function mdata))
+                    ":function references the function that was applied."))))
+
+          (testing "Column 1"
+            (is (error? column-b-err)
+                "First result should be the first column error")
+            (testing "Exception metadata"
+              (let [mdata (meta column-b-err)]
+                (is (= "b" (:column mdata) (:applied-values mdata))
+                    "The :column name and the :applied-values should be 'a'")
+                (is (= 1 (:column-position mdata))
+                    "The :column-position with the error is 0")
+                (is (= applied-erroring-function (:function mdata))
+                    ":function references the function that was applied."))))
+
+          (testing "First statement (inspite of column errors)"
+            (is (= "http://test.com/" (:s statement)))
+            (is (nil? (:o statement)))
+            (is (nil? (:p statement)))
+            (is (= "http://foobar.com/graph" (:c statement)))))))))
 
 (deftest apply-columns-test
   (let [ds (make-dataset [["foo" "bar"] ["bar" 1] ["baz" 2] ["lol" 3] ["lal" 4]])]
