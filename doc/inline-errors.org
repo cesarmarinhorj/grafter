@@ -1,0 +1,345 @@
+#+TITLE: Inline Errors
+
+/NOTE:/ This document describes experimental work currently found in the
+=better-errors= branch.  It includes source code examples to illustrate how
+things work.
+* Inline Errors
+** Motivation
+
+The motivation of this work is to be able to render Grafter errors inline in
+both tabular and graph template output to provide context on when and where they
+occurred.
+
+As errors are frequently triggered by unexected data and conditions, they
+conceptually can be traced to two places, the first is where in the code they
+occur; the second is where in the data they occur.
+
+This work attempts to help provide context to both developers and ultimately end
+users on where errors occur.  This context is incredibly useful and isn't
+included in standard stacktrace mechanisms.
+
+** Contextualised Tabular Errors
+
+
+Before we begin lets require some grafter libraries...
+
+#+BEGIN_SRC clojure :results silent
+(require '[grafter.tabular :refer :all])
+(require '[grafter.rdf.templater :refer [graph]])
+(require '[grafter.rdf.preview :refer [preview-graph]])
+(require '[clojure.pprint :refer [pprint]])
+#+END_SRC
+
+
+#+BEGIN_SRC clojure :results silent
+(def ds (make-dataset [[10 20] [nil 20]]))
+#+END_SRC
+
+Lets take a simple Grafter dataset like this one.  Note that it has a null value
+in cell a1:
+
+#+BEGIN_SRC clojure
+ds ;; =>
+#+END_SRC
+
+#+begin_example
+
+|  a |  b |
+|----+----|
+| 10 | 20 |
+|    | 20 |
+#+end_example
+
+If our pipeline were to try and derive a new column =c= which is the sum of =a=
+and =b=:
+
+#+BEGIN_SRC clojure :results
+(derive-column ds "c" ["a" "b"] +)
+#+END_SRC
+
+Then the =+= function will raise an exception when encountering the null value.
+Prior to this work an exception would pop the stack, giving you a standard stack
+trace; but loosing information about where the problem is.  Now the exception is
+placed inline in the dataset.
+
+#+begin_example
+
+|  a |  b |                                    c |
+|----+----+--------------------------------------|
+| 10 | 20 |                                   30 |
+|    | 20 | java.lang.NullPointerException: null |
+#+end_example
+
+#+BEGIN_SRC clojure :results silent
+(def ds (derive-column ds "c" ["a" "b"] +))
+#+END_SRC
+
+If we want to find out more we just need to look at the exception object:
+
+#+BEGIN_SRC clojure
+(-> ds :rows second (get "c"))
+#+END_SRC
+
+This returns the GrafterException that wraps the original
+=NullPointerException=.  NOTE that GrafterExceptions print the original
+exception for convenience when in the table.
+
+#+begin_example
+#<GrafterException java.lang.NullPointerException: null>
+#+end_example
+
+GrafterException's also carry some extra Clojure metadata on what happened, we
+can retrieve this like this:
+
+#+BEGIN_SRC clojure
+(-> ds :rows second (get "c") meta)
+#+END_SRC
+
+#+begin_example
+{:row {"b" 20, "a" nil}, :function #<core$_PLUS_ clojure.core$_PLUS_@6b477c7>, :applied-values (nil 20), :source-columns ("a" "b")}
+#+end_example
+
+This metadata shows us the original source =:row=, the =:function= it tried to
+apply, the =:applied-values= it tried to apply to the =:function= and the
+=:source-columns= from which they came.
+
+Note that we can use this mechanism to validate input data, by defining
+validation function that raise custom errors if there's a problem, and otherwise
+pass the value through.  For example:
+
+#+BEGIN_SRC clojure :results silent
+(defn valid-field? [field]
+  (if (odd? field)
+     field
+     (throw (RuntimeException. "Invalid field - Valid fields must be even numbers"))))
+#+END_SRC
+
+#+BEGIN_SRC clojure
+(-> (make-dataset [[1 2 3] [4 5 6]])
+    (mapc {:b valid-field?}))
+#+END_SRC
+
+#+begin_example
+
+| a |                                                                             b | c |
+|---+-------------------------------------------------------------------------------+---|
+| 1 | java.lang.RuntimeException: Invalid field - Valid fields must be even numbers | 3 |
+| 4 |                                                                             5 | 6 |
+#+end_example
+
+** Contextualised Triple Template Errors
+
+Sometimes it's easier to triangulate an error later on, not by its source but by
+its destination.  Grafter supports this too, by passing errors through their
+triple templates.
+
+So given the template:
+
+#+BEGIN_SRC clojure :results silent
+(def templatize (graph-fn [{:strs [b c]}]
+                   (graph "http://foo.com/graphs/1"
+                          ["http://subject.com/1"
+                            ["http://predicate.com/1" c]
+                          ["http://subject.com/2"]
+                            ["http://predicate.com/2" b]])))
+#+END_SRC
+
+And the following dataset that contains an error:
+
+#+BEGIN_SRC clojure
+ds
+#+END_SRC
+
+#+begin_example
+
+|  a |  b |                                    c |
+|----+----+--------------------------------------|
+| 10 | 20 |                                   30 |
+|    | 20 | java.lang.NullPointerException: null |
+#+end_example
+
+Lets find out where the NullPointerException was intended to end up.  We can do
+this by previewing the offending row 1 in the context of the whole template like
+so:
+
+#+BEGIN_SRC clojure :results output
+(pprint (preview-graph ds templatize 1))
+#+END_SRC
+
+#+begin_example
+{:bindings {:strs [b c]},
+ :row
+ {"a" nil,
+  "b" 20,
+  "c" #<GrafterException java.lang.NullPointerException: null>},
+ :template
+ ((graph
+   "http://foo.com/graphs/1"
+   ["http://subject.com/1"
+    ["http://predicate.com/1"
+     #<GrafterException java.lang.NullPointerException: null>]
+    ["http://subject.com/2"]
+    ["http://predicate.com/2" 20]]))}
+#+end_example
+
+The most useful information here is the =:template= which is the body of our
+=templatize= =graph-fn= form.  You'll notice that the exception is rendered here
+inline.
+
+Perhaps we didn't notice the error before hand in the table though, so what
+would happen if we ran the templatize step to generate quads?
+
+Attempting to RDFize it results in the sequence of quads as normal:
+
+#+BEGIN_SRC clojure
+(templatize ds)
+#+END_SRC
+
+#+begin_example
+(#grafter.rdf.protocols.Quad{:s "http://subject.com/", :p "http://predicate.com/", :o 20, :c "http://foo.com/graphs/1"} #grafter.rdf.protocols.Quad{:s "http://subject.com/", :p "http://predicate.com/", :o 30, :c "http://foo.com/graphs/1"} #grafter.rdf.protocols.Quad{:s "http://subject.com/", :p "http://predicate.com/", :o 20, :c "http://foo.com/graphs/1"} #grafter.rdf.protocols.Quad{:s "http://subject.com/", :p "http://predicate.com/", :o #<GrafterException java.lang.NullPointerException: null>, :c "http://foo.com/graphs/1"})
+#+end_example
+
+But notice that the fourth quad contains the GrafterException listed in =:o=
+position, so we can now see even at this late stage we can see the error in its
+current context.  We know that it was associated with =<http://subject.com/1>=.
+
+#+BEGIN_SRC clojure
+(nth (templatize ds) 3)
+#+END_SRC
+
+#+begin_example
+#grafter.rdf.protocols.Quad{:s "http://subject.com/1", :p "http://predicate.com/1", :o #<GrafterException java.lang.NullPointerException: null>, :c "http://foo.com/graphs/1"}
+#+end_example
+
+But what if we were here and wanted to know where this data came from?  No
+problem...
+
+#+BEGIN_SRC clojure
+(-> (templatize ds)
+    (nth 3)
+    :o
+    meta)
+#+END_SRC
+
+#+begin_example
+{:row {"b" 20, "a" nil}, :function #<core$_PLUS_ clojure.core$_PLUS_@6b477c7>, :applied-values (nil 20), :source-columns ("a" "b")}
+#+end_example
+
+Obviously at any stage we could also of asked for the stacktrace?
+
+#+BEGIN_SRC clojure :results output
+(->> (nth (templatize ds) 3)
+    :o
+    .printStackTrace)
+#+END_SRC
+
+#+begin_example
+grafter.tabular$derive_column$fn__16836$fn__16837.invoke(tabular.clj:278)
+grafter.tabular$derive_column$fn__16836.invoke(tabular.clj:278)
+clojure.core$map$fn__4245.invoke(core.clj:2557)
+clojure.lang.LazySeq.sval(LazySeq.java:40)
+clojure.lang.LazySeq.seq(LazySeq.java:49)
+clojure.lang.RT.seq(RT.java:484)
+clojure.core$seq.invoke(core.clj:133)
+clojure.core$map$fn__4245.invoke(core.clj:2551)
+clojure.lang.LazySeq.sval(LazySeq.java:40)
+clojure.lang.LazySeq.seq(LazySeq.java:49)
+clojure.lang.LazySeq.first(LazySeq.java:71)
+clojure.lang.RT.first(RT.java:577)
+clojure.core$first.invoke(core.clj:55)
+clojure.core$ffirst.invoke(core.clj:101)
+incanter.core$dataset.doInvoke(core.clj:1197)
+clojure.lang.RestFn.invoke(RestFn.java:423)
+grafter.tabular.common$make_dataset.invoke(common.clj:59)
+grafter.tabular$derive_column.invoke(tabular.clj:284)
+clojure.lang.AFn.applyToHelper(AFn.java:165)
+clojure.lang.AFn.applyTo(AFn.java:144)
+clojure.lang.Compiler$InvokeExpr.eval(Compiler.java:3553)
+clojure.lang.Compiler$DefExpr.eval(Compiler.java:417)
+clojure.lang.Compiler.eval(Compiler.java:6708)
+clojure.lang.Compiler.eval(Compiler.java:6666)
+clojure.core$eval.invoke(core.clj:2927)
+clojure.main$repl$read_eval_print__6625$fn__6628.invoke(main.clj:239)
+clojure.main$repl$read_eval_print__6625.invoke(main.clj:239)
+clojure.main$repl$fn__6634.invoke(main.clj:257)
+clojure.main$repl.doInvoke(main.clj:257)
+clojure.lang.RestFn.invoke(RestFn.java:1523)
+clojure.tools.nrepl.middleware.interruptible_eval$evaluate$fn__919.invoke(interruptible_eval.clj:72)
+clojure.lang.AFn.applyToHelper(AFn.java:152)
+clojure.lang.AFn.applyTo(AFn.java:144)
+clojure.core$apply.invoke(core.clj:624)
+clojure.core$with_bindings_STAR_.doInvoke(core.clj:1862)
+clojure.lang.RestFn.invoke(RestFn.java:425)
+clojure.tools.nrepl.middleware.interruptible_eval$evaluate.invoke(interruptible_eval.clj:56)
+clojure.tools.nrepl.middleware.interruptible_eval$interruptible_eval$fn__961$fn__964.invoke(interruptible_eval.clj:191)
+clojure.tools.nrepl.middleware.interruptible_eval$run_next$fn__956.invoke(interruptible_eval.clj:159)
+clojure.lang.AFn.run(AFn.java:22)
+java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1142)
+java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:617)
+java.lang.Thread.run(Thread.java:745)
+#+end_example
+** Handling errors in column headings
+
+#+BEGIN_SRC clojure :results silent
+(require 'clojure.string)
+#+END_SRC
+
+One corner case is how to handle errors in column headings.  The obvious thing
+to do is to try and handle them in the same inline contextualised manner as row
+level errors.
+
+This is the approach we take, and I believe it is well handled by our model but
+it has some implications.  Which we illustrate here.
+
+An error in a column heading might occur if we accidentally loaded a nil value
+into a column heading.
+
+#+BEGIN_SRC clojure :results silent
+(def ds (make-dataset [[1 2 3]] ["A" "B" nil]))
+
+(def colds (rename-columns ds clojure.string/lower-case))
+#+END_SRC
+
+#+BEGIN_SRC clojure :results value
+colds
+#+END_SRC
+
+#+begin_example
+
+| a | b | java.lang.NullPointerException: null |
+|---+---+--------------------------------------|
+| 1 | 2 |                                    3 |
+#+end_example
+
+As before this helpfully lets us see in the tabular view where the error
+occured.  However there is a small issue, as =graph-fn= templates typically use
+the column names to access the values, and =java.lang.NullPointerException:
+null= is not a value a user could select with.
+
+So what do triple templates do when they get an error in a column heading?
+
+#+BEGIN_SRC clojure
+(templatize colds)
+#+END_SRC
+
+#+begin_example
+(#<GrafterException java.lang.NullPointerException: null> #grafter.rdf.protocols.Quad{:s "http://subject.com/1", :p "http://predicate.com/1", :o nil, :c "http://foo.com/graphs/1"} #grafter.rdf.protocols.Quad{:s "http://subject.com/1", :p "http://subject.com/2", :o nil, :c "http://foo.com/graphs/1"} #grafter.rdf.protocols.Quad{:s "http://subject.com/1", :p "http://predicate.com/2", :o 2, :c "http://foo.com/graphs/1"})
+#+end_example
+
+Notice that the first of the statements is the GrafterException:
+
+#+BEGIN_SRC clojure
+(first (templatize colds))
+#+END_SRC
+
+#+begin_example
+#<GrafterException java.lang.NullPointerException: null>
+#+end_example
+
+This change means a that this work has changed the prior behaviour of =graph-fn=
+so that Exception objects and Quads can appear in the stream of values.
+Exceptions at this level though will always be from column errors, whilst row
+level errors will occur inside Quad objects.
+
+Column errors will always appear at the start of the stream before any quad
+values, meaning that this behaviour should still fail fast.
